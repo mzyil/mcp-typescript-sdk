@@ -706,7 +706,7 @@ export const GetPromptRequestSchema = RequestSchema.extend({
     /**
      * Arguments to use for templating the prompt.
      */
-    arguments: z.optional(z.record(z.string())),
+    arguments: z.optional(z.record(z.string(), z.string())),
   }),
 });
 
@@ -1003,7 +1003,7 @@ export const CallToolRequestSchema = RequestSchema.extend({
   method: z.literal("tools/call"),
   params: BaseRequestParamsSchema.extend({
     name: z.string(),
-    arguments: z.optional(z.record(z.unknown())),
+    arguments: z.optional(z.record(z.string(), z.unknown())),
   }),
 });
 

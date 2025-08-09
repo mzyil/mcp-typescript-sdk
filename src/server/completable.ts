@@ -1,13 +1,7 @@
 import {
-  ZodTypeAny,
-  ZodTypeDef,
-  ZodType,
-  ParseInput,
-  ParseReturnType,
-  RawCreateParams,
-  ZodErrorMap,
-  ProcessedCreateParams,
+  z,
 } from "zod";
+import { ZodTypeAny, ZodTypeDef, ZodType, ParseInput, ParseReturnType, RawCreateParams, ProcessedCreateParams, ZodErrorMap } from "zod/v3";
 
 export enum McpZodTypeKind {
   Completable = "McpCompletable",

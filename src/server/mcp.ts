@@ -1,15 +1,11 @@
 import { Server, ServerOptions } from "./index.js";
-import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   z,
-  ZodRawShape,
-  ZodObject,
-  ZodString,
-  AnyZodObject,
-  ZodTypeAny,
-  ZodType,
-  ZodTypeDef,
-  ZodOptional,
+  type ZodRawShape,
+  type ZodObject,
+  type ZodString,
+  type ZodType,
+  type ZodOptional,
 } from "zod";
 import {
   Implementation,
@@ -117,17 +113,14 @@ export class McpServer {
               title: tool.title,
               description: tool.description,
               inputSchema: tool.inputSchema
-                ? (zodToJsonSchema(tool.inputSchema, {
-                  strictUnions: true,
-                }) as Tool["inputSchema"])
+                ? (z.toJSONSchema(tool.inputSchema) as Tool["inputSchema"])
                 : EMPTY_OBJECT_JSON_SCHEMA,
               annotations: tool.annotations,
             };
 
             if (tool.outputSchema) {
-              toolDefinition.outputSchema = zodToJsonSchema(
-                tool.outputSchema,
-                { strictUnions: true }
+              toolDefinition.outputSchema = z.toJSONSchema(
+                tool.outputSchema
               ) as Tool["outputSchema"];
             }
 
@@ -287,14 +280,18 @@ export class McpServer {
       return EMPTY_COMPLETION_RESULT;
     }
 
-    const field = prompt.argsSchema.shape[request.params.argument.name];
-    if (!(field instanceof Completable)) {
-      return EMPTY_COMPLETION_RESULT;
-    }
+    // TODO: Update Completable implementation for Zod v4
+    // For now, return empty completion result
+    return EMPTY_COMPLETION_RESULT;
 
-    const def: CompletableDef<ZodString> = field._def;
-    const suggestions = await def.complete(request.params.argument.value, request.params.context);
-    return createCompletionResult(suggestions);
+    // const field = prompt.argsSchema.shape[request.params.argument.name];
+    // if (!(field instanceof Completable)) {
+    //   return EMPTY_COMPLETION_RESULT;
+    // }
+
+    // const def: CompletableDef<ZodString> = field._def;
+    // const suggestions = await def.complete(request.params.argument.value, request.params.context);
+    // return createCompletionResult(suggestions);
   }
 
   private async handleResourceCompletion(
@@ -918,7 +915,22 @@ export class McpServer {
   }
 
   /**
-   * Registers a tool with a config object and callback.
+   * Registers a tool with ZodSchema inputs/outputs (Zod v4 style).
+   */
+  registerTool<Input, Output>(
+    name: string,
+    config: {
+      title?: string;
+      description?: string;
+      inputSchema?: z.ZodSchema<Input>;
+      outputSchema?: z.ZodSchema<Output>;
+      annotations?: ToolAnnotations;
+    },
+    cb: (input: Input, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => CallToolResult | Promise<CallToolResult>
+  ): RegisteredTool;
+
+  /**
+   * Registers a tool with a config object and callback (ZodRawShape style).
    */
   registerTool<InputArgs extends ZodRawShape, OutputArgs extends ZodRawShape>(
     name: string,
@@ -930,6 +942,19 @@ export class McpServer {
       annotations?: ToolAnnotations;
     },
     cb: ToolCallback<InputArgs>
+  ): RegisteredTool;
+
+  // Implementation for both overloads
+  registerTool<Input = unknown, Output = unknown, InputArgs extends ZodRawShape = ZodRawShape, OutputArgs extends ZodRawShape = ZodRawShape>(
+    name: string,
+    config: {
+      title?: string;
+      description?: string;
+      inputSchema?: z.ZodSchema<Input> | InputArgs;
+      outputSchema?: z.ZodSchema<Output> | OutputArgs;
+      annotations?: ToolAnnotations;
+    },
+    cb: ((input: Input, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => CallToolResult | Promise<CallToolResult>) | ToolCallback<InputArgs>
   ): RegisteredTool {
     if (this._registeredTools[name]) {
       throw new Error(`Tool ${name} is already registered`);
@@ -937,15 +962,85 @@ export class McpServer {
 
     const { title, description, inputSchema, outputSchema, annotations } = config;
 
-    return this._createRegisteredTool(
+    // Check if we're dealing with ZodSchema (has _def property) or ZodRawShape
+    const isZodSchema = (schema: any): schema is z.ZodSchema<any> => {
+      return schema && typeof schema === 'object' && '_def' in schema;
+    };
+
+    let processedInputSchema: z.ZodObject<any> | undefined;
+    let processedOutputSchema: z.ZodObject<any> | undefined;
+
+    if (inputSchema) {
+      if (isZodSchema(inputSchema)) {
+        // It's already a ZodSchema, use it directly
+        processedInputSchema = inputSchema as z.ZodObject<any>;
+      } else {
+        // It's a ZodRawShape, convert to object
+        processedInputSchema = z.object(inputSchema as ZodRawShape);
+      }
+    }
+
+    if (outputSchema) {
+      if (isZodSchema(outputSchema)) {
+        // It's already a ZodSchema, use it directly
+        processedOutputSchema = outputSchema as z.ZodObject<any>;
+      } else {
+        // It's a ZodRawShape, convert to object
+        processedOutputSchema = z.object(outputSchema as ZodRawShape);
+      }
+    }
+
+    return this._createRegisteredToolFromSchemas(
       name,
+      title,
+      description,
+      processedInputSchema,
+      processedOutputSchema,
+      annotations,
+      cb as any
+    );
+  }
+
+  private _createRegisteredToolFromSchemas(
+    name: string,
+    title: string | undefined,
+    description: string | undefined,
+    inputSchema: z.ZodObject<any> | undefined,
+    outputSchema: z.ZodObject<any> | undefined,
+    annotations: ToolAnnotations | undefined,
+    callback: any
+  ): RegisteredTool {
+    const registeredTool: RegisteredTool = {
       title,
       description,
       inputSchema,
       outputSchema,
       annotations,
-      cb as ToolCallback<ZodRawShape | undefined>
-    );
+      callback,
+      enabled: true,
+      disable: () => registeredTool.update({ enabled: false }),
+      enable: () => registeredTool.update({ enabled: true }),
+      remove: () => registeredTool.update({ name: null }),
+      update: (updates) => {
+        if (typeof updates.name !== "undefined" && updates.name !== name) {
+          delete this._registeredTools[name]
+          if (updates.name) this._registeredTools[updates.name] = registeredTool
+        }
+        if (typeof updates.title !== "undefined") registeredTool.title = updates.title
+        if (typeof updates.description !== "undefined") registeredTool.description = updates.description
+        if (typeof updates.paramsSchema !== "undefined") registeredTool.inputSchema = z.object(updates.paramsSchema)
+        if (typeof updates.callback !== "undefined") registeredTool.callback = updates.callback
+        if (typeof updates.annotations !== "undefined") registeredTool.annotations = updates.annotations
+        if (typeof updates.enabled !== "undefined") registeredTool.enabled = updates.enabled
+        this.sendToolListChanged()
+      },
+    };
+
+    this._registeredTools[name] = registeredTool;
+    this.setToolRequestHandlers();
+    this.sendToolListChanged();
+
+    return registeredTool;
   }
 
   /**
@@ -1151,7 +1246,7 @@ export class ResourceTemplate {
 export type ToolCallback<Args extends undefined | ZodRawShape = undefined> =
   Args extends ZodRawShape
   ? (
-    args: z.objectOutputType<Args, ZodTypeAny>,
+    args: z.infer<ZodObject<Args>>,
     extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
   ) => CallToolResult | Promise<CallToolResult>
   : (extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => CallToolResult | Promise<CallToolResult>;
@@ -1159,8 +1254,8 @@ export type ToolCallback<Args extends undefined | ZodRawShape = undefined> =
 export type RegisteredTool = {
   title?: string;
   description?: string;
-  inputSchema?: AnyZodObject;
-  outputSchema?: AnyZodObject;
+  inputSchema?: ZodObject<any>;
+  outputSchema?: ZodObject<any>;
   annotations?: ToolAnnotations;
   callback: ToolCallback<undefined | ZodRawShape>;
   enabled: boolean;
@@ -1257,16 +1352,14 @@ export type RegisteredResourceTemplate = {
 };
 
 type PromptArgsRawShape = {
-  [k: string]:
-  | ZodType<string, ZodTypeDef, string>
-  | ZodOptional<ZodType<string, ZodTypeDef, string>>;
+  [k: string]: ZodString | ZodOptional<ZodString>;
 };
 
 export type PromptCallback<
   Args extends undefined | PromptArgsRawShape = undefined,
 > = Args extends PromptArgsRawShape
   ? (
-    args: z.objectOutputType<Args, ZodTypeAny>,
+    args: z.infer<ZodObject<Args>>,
     extra: RequestHandlerExtra<ServerRequest, ServerNotification>,
   ) => GetPromptResult | Promise<GetPromptResult>
   : (extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => GetPromptResult | Promise<GetPromptResult>;
