@@ -45,6 +45,8 @@ export type ServerOptions = ProtocolOptions & {
    * Optional instructions describing how to use the server and its features.
    */
   instructions?: string;
+
+  stripMetaSchemaFeatures?: boolean;
 };
 
 /**
@@ -85,6 +87,7 @@ export class Server<
   private _clientVersion?: Implementation;
   private _capabilities: ServerCapabilities;
   private _instructions?: string;
+  private _serverOptions?: ServerOptions;
 
   /**
    * Callback for when initialization has fully completed (i.e., the client has sent an `initialized` notification).
@@ -101,6 +104,7 @@ export class Server<
     super(options);
     this._capabilities = options?.capabilities ?? {};
     this._instructions = options?.instructions;
+    this._serverOptions = options;
 
     this.setRequestHandler(InitializeRequestSchema, (request) =>
       this._oninitialize(request),
@@ -108,6 +112,10 @@ export class Server<
     this.setNotificationHandler(InitializedNotificationSchema, () =>
       this.oninitialized?.(),
     );
+  }
+
+  get serverOptions(): ServerOptions | undefined {
+    return this._serverOptions;
   }
 
   /**

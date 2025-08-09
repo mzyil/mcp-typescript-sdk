@@ -108,13 +108,16 @@ export class McpServer {
           ([, tool]) => tool.enabled,
         ).map(
           ([name, tool]): Tool => {
+            const inputSchema = tool.inputSchema ? z.toJSONSchema(tool.inputSchema) as Tool["inputSchema"] : EMPTY_OBJECT_JSON_SCHEMA
+            if (this.server.serverOptions?.stripMetaSchemaFeatures) {
+              const keys = Array.from(Object.keys(inputSchema)) as (keyof typeof inputSchema)[]
+              keys.filter(key => key.startsWith("$")).forEach(key => delete inputSchema[key])
+            }
             const toolDefinition: Tool = {
               name,
               title: tool.title,
               description: tool.description,
-              inputSchema: tool.inputSchema
-                ? (z.toJSONSchema(tool.inputSchema) as Tool["inputSchema"])
-                : EMPTY_OBJECT_JSON_SCHEMA,
+              inputSchema,
               annotations: tool.annotations,
             };
 
